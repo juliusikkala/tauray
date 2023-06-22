@@ -43,7 +43,7 @@ void frame_client(const options& opt)
 
     nng_socket socket;
     nng_bus0_open(&socket);
-    std::string address = "tcp://"+opt.connect;
+    std::string address = "tcp://"+(opt.connect.size() == 0 ? "localhost:3333" : opt.connect[0]);
     nng_dial(socket, address.c_str(), nullptr, NNG_FLAG_NONBLOCK);
 
     using namespace std::chrono_literals;

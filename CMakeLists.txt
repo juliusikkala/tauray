@@ -64,6 +64,7 @@ find_package(nng QUIET)
 find_package(libcbor QUIET)
 find_package(Vulkan REQUIRED)
 find_package(assimp REQUIRED)
+find_package(cereal REQUIRED)
 
 add_library(tauray-core STATIC
   external/stb_image.c

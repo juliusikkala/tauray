@@ -8,27 +8,72 @@ int main(int, char** argv) try
     tr::options opt;
     tr::parse_command_line_options(argv, opt);
 
-    // Initialize log timer.
-    tr::get_initial_time();
-    std::optional<std::ofstream> timing_output_file;
+    bool worker = opt.worker;
+    int port = opt.port;
 
-    if(opt.silent)
+    do
     {
-        tr::enabled_log_types[(uint32_t)tr::log_type::GENERAL] = false;
-        tr::enabled_log_types[(uint32_t)tr::log_type::WARNING] = false;
+        if(worker)
+        {
+            // TODO: Wait for connection and read options.
+            //deserialize(opt, options_packet.data(), options_packet.size());
+            opt.worker = worker;
+        }
+        else
+        {
+            std::vector<uint8_t> options_packet = serialize(opt);
+            // TODO: try to connect to all workers listed in opt.connect.
+            // TODO: Send options to workers
+        }
+
+        // Initialize log timer.
+        tr::get_initial_time();
+        std::optional<std::ofstream> timing_output_file;
+
+        if(opt.silent)
+        {
+            tr::enabled_log_types[(uint32_t)tr::log_type::GENERAL] = false;
+            tr::enabled_log_types[(uint32_t)tr::log_type::WARNING] = false;
+        }
+
+        if(opt.timing_output.size() != 0)
+        {
+            timing_output_file.emplace(opt.timing_output, std::ios::binary|std::ios::trunc);
+            tr::log_output_streams[(uint32_t)tr::log_type::TIMING] = &timing_output_file.value();
+        }
+
+        std::unique_ptr<tr::context> ctx(tr::create_context(opt));
+
+        tr::scene_data sd;
+        if(worker)
+        {
+            // TODO: Send list of local devices to capitalist
+            // TODO: Wait for capitalist to send list of all remote devices and
+            // our device indices.
+            // TODO: Add remote devices to context
+
+            // TODO: implement load_network_scenes, should sync with
+            // load_scenes.
+            //sd = tr::load_network_scenes(*ctx, opt);
+        }
+        else
+        {
+            // TODO: Wait for workers to send device lists
+            // TODO: Assign unique indices to all devices
+            // TODO: Send all device infos to all workers
+            // TODO: Add remote devices to context
+
+            // TODO: Make load_scenes send each scene to all clients.
+            sd = tr::load_scenes(*ctx, opt);
+        }
+
+        tr::run(*ctx, sd, opt);
+
+        // TODO: Detect if quit by disconnect or ctrl-C. Disconnect should
+        // continue looping if worker.
+        break;
     }
-
-    if(opt.timing_output.size() != 0)
-    {
-        timing_output_file.emplace(opt.timing_output, std::ios::binary|std::ios::trunc);
-        tr::log_output_streams[(uint32_t)tr::log_type::TIMING] = &timing_output_file.value();
-    }
-
-    std::unique_ptr<tr::context> ctx(tr::create_context(opt));
-
-    tr::scene_data sd = tr::load_scenes(*ctx, opt);
-
-    tr::run(*ctx, sd, opt);
+    while(worker);
 
     return 0;
 }

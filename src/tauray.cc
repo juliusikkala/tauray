@@ -635,7 +635,7 @@ renderer* create_renderer(context& ctx, options& opt, scene& s)
             {
                 dshgi_renderer::options dr_opt;
                 dshgi_client::options client;
-                client.server_address = opt.connect;
+                client.server_address = opt.connect.size() == 0 ? "localhost:3333" : opt.connect[0];
                 dr_opt.sh_source = client;
                 dr_opt.sh_order = opt.sh_order;
                 dr_opt.use_probe_visibility = opt.use_probe_visibility;

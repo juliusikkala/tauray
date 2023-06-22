@@ -346,9 +346,14 @@
         "Sets the initial port number used for server modes. Further ports " \
         "are reserved from successive numbers if needed.", \
         3333, 0, 65535) \
-    TR_STRING_OPT(connect, \
-        "Sets the server address for client modes.", \
-        "localhost:3333") \
+    TR_VECSTRING_OPT(connect, \
+        "Sets the server address(es) for networking modes. If the mode " \
+        "mandates a connection, this defaults to localhost:3333.") \
+    TR_BOOL_OPT(worker, \
+        "Can be used to set this Tauray instance as a worker in a multi-node " \
+        "setup. The only other option to take effect is \"port\", the rest " \
+        "are sent by the capitalist on connection.", \
+        false) \
     TR_FLOAT_OPT(throttle, \
         "Set framerate throttle. Does not affect frametime in replay mode.", \
         0.0f, 0.0f, FLT_MAX) \
@@ -593,7 +598,7 @@ public:
 
 struct options
 {
-    enum class display_type
+    enum class display_type: int
     {
         HEADLESS = 0,
         WINDOW,
@@ -603,14 +608,14 @@ struct options
         FRAME_CLIENT
     };
 
-    enum class denoiser_type
+    enum class denoiser_type: int
     {
         NONE = 0,
         SVGF,
         BMFR
     };
 
-    enum basic_pipeline_type
+    enum basic_pipeline_type: int
     {
         PATH_TRACER = 0,
         DIRECT,
@@ -642,7 +647,8 @@ struct options
 #define TR_ENUM_OPT(name, type, description, default, ...) type name = default;
 #define TR_SETINT_OPT(name, description) std::set<int> name;
 #define TR_VECFLOAT_OPT(name, description) std::vector<double> name;
-#define TR_STRUCT_OPT(name, description, ...) struct { __VA_ARGS__ } name;
+#define TR_VECSTRING_OPT(name, description) std::vector<std::string> name;
+#define TR_STRUCT_OPT(name, description, ...) struct name##_struct { __VA_ARGS__ } name;
 #define TR_STRUCT_OPT_INT(name, default, min, max) int name = default;
 #define TR_STRUCT_OPT_FLOAT(name, default, min, max) float name = default;
     TR_OPTIONS
@@ -657,6 +663,7 @@ struct options
 #undef TR_ENUM_OPT
 #undef TR_SETINT_OPT
 #undef TR_VECFLOAT_OPT
+#undef TR_VECSTRING_OPT
 #undef TR_STRUCT_OPT
 #undef TR_STRUCT_OPT_INT
 #undef TR_STRUCT_OPT_FLOAT
@@ -668,6 +675,9 @@ bool parse_command(const char* config_str, options& opt);
 void print_command_help(const std::string& command);
 void print_help(const char* program_name);
 void print_options(options& opt, bool full);
+
+std::vector<uint8_t> serialize(options& opt);
+void deserialize(options& opt, const uint8_t* data, size_t data_size);
 
 }
 

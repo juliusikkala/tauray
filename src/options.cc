@@ -4,6 +4,12 @@
 #include <cstdlib>
 #include <iostream>
 #include <algorithm>
+#include <cereal/archives/portable_binary.hpp>
+#include <cereal/types/vector.hpp>
+#include <cereal/types/string.hpp>
+#include <cereal/types/set.hpp>
+#include <cereal/types/optional.hpp>
+#include <cereal/types/variant.hpp>
 
 namespace
 {
@@ -49,6 +55,17 @@ bool parse_identifier(const char*& arg, std::string& name)
     arg += len;
     arg += strspn(arg, " \t\r\n=");
     return true;
+}
+
+std::string parse_string(const char*& arg)
+{
+    // Skip whitespace
+    arg += strspn(arg, " \t\r\n");
+    size_t len = strcspn(arg, " \t\r\n,");
+    std::string name = std::string(arg, len);
+    arg += len;
+    arg += strspn(arg, " \t\r\n");
+    return name;
 }
 
 void parse_param(const std::string& name, const char*& arg, std::string& param)
@@ -299,6 +316,16 @@ void parse_command_line_options(char** argv, options& opt)
                         arg++; \
                     }\
                 }
+#define TR_VECSTRING_OPT(name, description) \
+                ELSEIF(prefix(arg, DASHIFY(name)+"=")) \
+                {\
+                    while(true) \
+                    {\
+                        opt.name.push_back(parse_string(arg));\
+                        if(*arg != ',') break;\
+                        arg++; \
+                    }\
+                }
 #define TR_STRUCT_OPT_INT(name, default, min, max) \
                 if(*arg != '\0') { \
                     s.name = parse_int(name_prefix+DASHIFY(name), arg, min, max, ','); \
@@ -333,6 +360,7 @@ void parse_command_line_options(char** argv, options& opt)
 #undef TR_ENUM_OPT
 #undef TR_SETINT_OPT
 #undef TR_VECFLOAT_OPT
+#undef TR_VECSTRING_OPT
 #undef TR_STRUCT_OPT_INT
 #undef TR_STRUCT_OPT_FLOAT
 #undef TR_STRUCT_OPT
@@ -347,6 +375,7 @@ void parse_command_line_options(char** argv, options& opt)
 #define TR_ENUM_OPT(...)
 #define TR_SETINT_OPT(...)
 #define TR_VECFLOAT_OPT(...)
+#define TR_VECSTRING_OPT(...)
 #define TR_STRUCT_OPT(...)
                 if(!passed) throw option_parse_error(
                     "Unknown long flag " + std::string(arg));
@@ -428,6 +457,7 @@ void parse_command_line_options(char** argv, options& opt)
 #undef TR_ENUM_OPT
 #undef TR_SETINT_OPT
 #undef TR_VECFLOAT_OPT
+#undef TR_VECSTRING_OPT
 #undef TR_STRUCT_OPT
 }
 
@@ -543,6 +573,16 @@ bool parse_config_options(const char* config_str, fs::path relative_path, option
                 arg++; \
             }\
         }
+#define TR_VECSTRING_OPT(name, description) \
+        else if(identifier == DASHIFY(name)) \
+        {\
+            while(true) \
+            {\
+                opt.name.push_back(parse_string(arg));\
+                if(*arg != ',') break;\
+                arg++; \
+            }\
+        }
 #define TR_STRUCT_OPT_INT(member, default, min, max) \
         if(check_name ? (id == DASHIFY(member)) : (*arg != '\0')) { \
             s.member = parse_int(name_prefix+DASHIFY(member), arg, min, max, ','); \
@@ -587,6 +627,7 @@ bool parse_config_options(const char* config_str, fs::path relative_path, option
 #undef TR_ENUM_OPT
 #undef TR_SETINT_OPT
 #undef TR_VECFLOAT_OPT
+#undef TR_VECSTRING_OPT
 #undef TR_STRUCT_OPT_INT
 #undef TR_STRUCT_OPT_FLOAT
 #undef TR_STRUCT_OPT
@@ -641,6 +682,8 @@ void print_command_help(const std::string& command)
     opt(#name, "int,int,...", '\0', description, "");
 #define TR_VECFLOAT_OPT(name, description) \
     opt(#name, "float,float,...", '\0', description, "");
+#define TR_VECSTRING_OPT(name, description) \
+    opt(#name, "string,string,...", '\0', description, "");
 #define TR_STRUCT_OPT_INT(name, default, min, max) \
     type_tag += DASHIFY(name) + ","; \
     default_str += DASHIFY(name) + " = " + std::to_string(default) + ", ";
@@ -668,6 +711,7 @@ void print_command_help(const std::string& command)
 #undef TR_ENUM_OPT
 #undef TR_SETINT_OPT
 #undef TR_VECFLOAT_OPT
+#undef TR_VECSTRING_OPT
 #undef TR_STRUCT_OPT_INT
 #undef TR_STRUCT_OPT_FLOAT
 #undef TR_STRUCT_OPT
@@ -720,6 +764,8 @@ Options:
     lopt(#name, "int,int,...", '\0', description, "");
 #define TR_VECFLOAT_OPT(name, description) \
     lopt(#name, "float,float,...", '\0', description, "");
+#define TR_VECSTRING_OPT(name, description) \
+    lopt(#name, "string,string,...", '\0', description, "");
 #define TR_STRUCT_OPT_INT(name, default, min, max) \
     type_tag += DASHIFY(name) + ","; \
     default_str += DASHIFY(name) + " = " + std::to_string(default) + ", ";
@@ -747,6 +793,7 @@ Options:
 #undef TR_ENUM_OPT
 #undef TR_SETINT_OPT
 #undef TR_VECFLOAT_OPT
+#undef TR_VECSTRING_OPT
 #undef TR_STRUCT_OPT_INT
 #undef TR_STRUCT_OPT_FLOAT
 #undef TR_STRUCT_OPT
@@ -820,6 +867,19 @@ void print_options(options& opt, bool full)
         } \
         std::cout << std::endl; \
     }
+#define TR_VECSTRING_OPT(name, ...) \
+    if(full || opt.name.size() != 0) \
+    { \
+        std::cout << DASHIFY(name) << " "; \
+        bool first = true; \
+        for(const std::string& n: opt.name) \
+        { \
+            if(!first) std::cout << ","; \
+            std::cout << n; \
+            first = false;\
+        } \
+        std::cout << std::endl; \
+    }
 #define TR_STRUCT_OPT_INT(name, default, ...) \
     if(full || value.name != default) \
         std::cout << name_start+DASHIFY(name) << " " << value.name << std::endl;
@@ -844,10 +904,108 @@ void print_options(options& opt, bool full)
 #undef TR_ENUM_OPT
 #undef TR_SETINT_OPT
 #undef TR_VECFLOAT_OPT
+#undef TR_VECSTRING_OPT
 #undef TR_STRUCT_OPT_INT
 #undef TR_STRUCT_OPT_FLOAT
 #undef TR_STRUCT_OPT
 #undef dump
+}
+
+#define TR_BOOL_OPT(...)
+#define TR_BOOL_SOPT(...)
+#define TR_INT_OPT(...)
+#define TR_INT_SOPT(...)
+#define TR_FLOAT_OPT(...)
+#define TR_STRING_OPT(...)
+#define TR_FLAG_STRING_OPT(...)
+#define TR_VEC3_OPT(...)
+#define TR_ENUM_OPT(...)
+#define TR_SETINT_OPT(...)
+#define TR_VECFLOAT_OPT(...)
+#define TR_VECSTRING_OPT(...)
+#define TR_STRUCT_OPT(name, description, ...) \
+    template<class Archive> \
+    void serialize(Archive& archive, options::name##_struct& m) \
+    { \
+        __VA_ARGS__ \
+    }
+#define TR_STRUCT_OPT_INT(name, default, min, max) archive(m.name);
+#define TR_STRUCT_OPT_FLOAT(name, default, min, max) archive(m.name);
+    TR_OPTIONS
+#undef TR_BOOL_OPT
+#undef TR_BOOL_SOPT
+#undef TR_INT_OPT
+#undef TR_INT_SOPT
+#undef TR_FLOAT_OPT
+#undef TR_STRING_OPT
+#undef TR_FLAG_STRING_OPT
+#undef TR_VEC3_OPT
+#undef TR_ENUM_OPT
+#undef TR_SETINT_OPT
+#undef TR_VECFLOAT_OPT
+#undef TR_VECSTRING_OPT
+#undef TR_STRUCT_OPT
+#undef TR_STRUCT_OPT_INT
+#undef TR_STRUCT_OPT_FLOAT
+
+template<class Archive>
+void serialize(Archive& ar, options& opt)
+{
+    ar(
+#define TR_BOOL_OPT(name, description, default) opt.name,
+#define TR_BOOL_SOPT(name, shorthand, description) opt.name,
+#define TR_INT_OPT(name, description, default, min, max) opt.name,
+#define TR_INT_SOPT(name, shorthand, description, default, min, max) opt.name,
+#define TR_FLOAT_OPT(name, description, default, min, max) opt.name,
+#define TR_STRING_OPT(name, description, default) opt.name,
+#define TR_FLAG_STRING_OPT(name, description, default) opt.name, opt.name##_flag,
+#define TR_VEC3_OPT(name, description, default, min, max) opt.name.x, opt.name.y, opt.name.z,
+#define TR_ENUM_OPT(name, type, description, default, ...) opt.name,
+#define TR_SETINT_OPT(name, description) opt.name,
+#define TR_VECFLOAT_OPT(name, description) opt.name,
+#define TR_VECSTRING_OPT(name, description) opt.name,
+#define TR_STRUCT_OPT(name, description, ...) opt.name,
+        TR_OPTIONS
+#undef TR_BOOL_OPT
+#undef TR_BOOL_SOPT
+#undef TR_INT_OPT
+#undef TR_INT_SOPT
+#undef TR_FLOAT_OPT
+#undef TR_STRING_OPT
+#undef TR_FLAG_STRING_OPT
+#undef TR_VEC3_OPT
+#undef TR_ENUM_OPT
+#undef TR_SETINT_OPT
+#undef TR_VECFLOAT_OPT
+#undef TR_VECSTRING_OPT
+#undef TR_STRUCT_OPT
+        opt.running,
+        opt.scene_paths
+    );
+}
+
+std::vector<uint8_t> serialize(options& opt)
+{
+    std::stringstream s;
+    {
+        cereal::PortableBinaryOutputArchive o(s);
+        serialize(o, opt);
+    }
+
+    size_t size = s.tellp();
+    std::vector<uint8_t> out(size);
+    s.read((char*)out.data(), size);
+    return out;
+}
+
+void deserialize(options& opt, const uint8_t* data, size_t data_size)
+{
+    std::stringstream s;
+    s.write((char*)data, data_size);
+    {
+        cereal::PortableBinaryInputArchive o(s);
+        serialize(o, opt);
+    }
 }
 
 }
