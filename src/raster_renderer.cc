@@ -10,13 +10,13 @@ namespace tr
 raster_renderer::raster_renderer(context& ctx, const options& opt)
 :   ctx(&ctx), opt(opt), smr(ctx),
     post_processing(
-        ctx.get_display_device(),
+        *ctx.get_display_device(),
         ctx.get_size(),
         opt.post_process
     )
 {
-    skinning.reset(new skinning_stage(ctx.get_display_device(), opt.max_skinned_meshes));
-    scene_update.reset(new scene_update_stage(ctx.get_display_device(), opt.scene_options));
+    skinning.reset(new skinning_stage(*ctx.get_display_device(), opt.max_skinned_meshes));
+    scene_update.reset(new scene_update_stage(*ctx.get_display_device(), opt.scene_options));
     init_common_resources();
 }
 
@@ -69,7 +69,7 @@ dependencies raster_renderer::render_core(dependencies deps)
 
 void raster_renderer::init_common_resources()
 {
-    device_data& d = ctx->get_display_device();
+    device_data& d = *ctx->get_display_device();
 
     int max_msaa = (int)get_max_available_sample_count(*ctx);
     int fixed_msaa = min((int)next_power_of_two(opt.msaa_samples), max_msaa);

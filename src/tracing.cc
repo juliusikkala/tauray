@@ -193,6 +193,30 @@ float tracing_record::get_duration(size_t device_index, const std::string& name)
     return total_time;
 }
 
+float tracing_record::get_net_duration(size_t network_id, const std::string& name) const
+{
+    int local_id = ctx->get_network_devices()[network_id].local_device_index;
+    if(local_id >= 0) return get_duration(local_id, name);
+
+    // TODO: Sync timing data for remote devices, current impl just gives the
+    // average time of local devices instead so that it's plausible.
+    const timing_result* res = find_latest_finished_frame();
+    if(!res) return 0.0f;
+
+    float avg_time = 0.0f;
+    for(size_t device_index = 0; device_index < ctx->get_devices().size(); ++device_index)
+    {
+        float total_time = 0.0f;
+        for(const trace_event& ti: res->device_traces[device_index])
+        {
+            if(ti.name.compare(0, name.length(), name) == 0)
+                total_time += ti.duration_ns;
+        }
+        avg_time += total_time;
+    }
+    return avg_time / ctx->get_devices().size();
+}
+
 void tracing_record::print_last_trace(trace_format format)
 {
     const timing_result* res = find_latest_finished_frame();

@@ -257,7 +257,7 @@ dshgi_client::dshgi_client(context& ctx, const options& opt)
     remote_timestamp(0), new_remote_timestamp(false), exit_receiver(false),
     receiver_thread(receiver_worker, this)
 {
-    sh_refresher.reset(new dshgi_client_stage(ctx.get_display_device(), *this));
+    sh_refresher.reset(new dshgi_client_stage(*ctx.get_display_device(), *this));
 }
 
 dshgi_client::~dshgi_client()
@@ -318,13 +318,13 @@ bool dshgi_client::refresh()
         if(lg.topo_changed)
         {
             sh_grid_upload_textures.emplace(
-                &lg.grid, lg.grid.create_texture(ctx->get_display_device())
+                &lg.grid, lg.grid.create_texture(*ctx->get_display_device())
             );
             sh_grid_tmp_textures.emplace(
-                &lg.grid, lg.grid.create_texture(ctx->get_display_device())
+                &lg.grid, lg.grid.create_texture(*ctx->get_display_device())
             );
             sh_grid_blended_textures.emplace(
-                &lg.grid, lg.grid.create_texture(ctx->get_display_device())
+                &lg.grid, lg.grid.create_texture(*ctx->get_display_device())
             );
         }
 

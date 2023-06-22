@@ -110,11 +110,11 @@ dshgi_server::dshgi_server(context& ctx, const options& opt)
 :   ctx(&ctx), opt(opt), sh(ctx, opt.sh), exit_sender(false),
     subscriber_count(0), sender_thread(sender_worker, this)
 {
-    skinning.reset(new skinning_stage(ctx.get_display_device(), opt.max_skinned_meshes));
-    scene_update.reset(new scene_update_stage(ctx.get_display_device(), {}));
-    sh_grid_to_cpu.reset(new sh_grid_to_cpu_stage(ctx.get_display_device()));
+    skinning.reset(new skinning_stage(*ctx.get_display_device(), opt.max_skinned_meshes));
+    scene_update.reset(new scene_update_stage(*ctx.get_display_device(), {}));
+    sh_grid_to_cpu.reset(new sh_grid_to_cpu_stage(*ctx.get_display_device()));
 
-    sender_semaphore = create_timeline_semaphore(ctx.get_display_device());
+    sender_semaphore = create_timeline_semaphore(*ctx.get_display_device());
 }
 
 dshgi_server::~dshgi_server()
@@ -174,7 +174,7 @@ void dshgi_server::sender_worker(dshgi_server* s)
     if(err < 0)
         throw std::runtime_error(strerror(errno));
 
-    device_data& dev = s->ctx->get_display_device();
+    device_data& dev = *s->ctx->get_display_device();
     zpoller_t* poller = zpoller_new(socket, nullptr);
 
     auto check_recv = [&](){

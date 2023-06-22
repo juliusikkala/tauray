@@ -42,6 +42,7 @@ public:
     vk::QueryPool get_timestamp_pool(size_t device_index, uint32_t frame_index);
 
     float get_duration(size_t device_index, const std::string& name) const;
+    float get_net_duration(size_t network_id, const std::string& name) const;
     void print_last_trace(trace_format format = SIMPLE);
 
 private:

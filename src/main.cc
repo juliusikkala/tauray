@@ -52,6 +52,8 @@ int main(int, char** argv) try
             // our device indices.
             // TODO: Add remote devices to context
 
+            ctx->assign_network_ids();
+
             // TODO: implement load_network_scenes, should sync with
             // load_scenes.
             //sd = tr::load_network_scenes(*ctx, opt);
@@ -60,8 +62,15 @@ int main(int, char** argv) try
         {
             // TODO: Wait for workers to send device lists
             // TODO: Assign unique indices to all devices
-            // TODO: Send all device infos to all workers
             // TODO: Add remote devices to context
+
+            size_t base_index = ctx->get_devices().size();
+
+            ctx->get_network_devices().push_back({base_index++, 0, 1});
+            ctx->get_network_devices().push_back({base_index++, 1, 1});
+
+            ctx->assign_network_ids();
+            // TODO: Send all device infos to all workers
 
             // TODO: Make load_scenes send each scene to all clients.
             sd = tr::load_scenes(*ctx, opt);

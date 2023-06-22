@@ -20,6 +20,7 @@ class context;
 struct device_data
 {
     size_t index = 0;
+    size_t network_id = 0;
     context* ctx = nullptr;
     vk::PhysicalDevice pdev;
     vk::Device dev;
@@ -54,6 +55,15 @@ struct device_data
     VmaAllocator allocator;
 };
 
+struct network_device_data
+{
+    size_t network_id = 0;
+    // -1 implies that the device is remote. Otherwise, this is the
+    // corresponding index to the local devices.
+    int local_device_index = -1;
+    size_t remote_host_id = 0;
+};
+
 class placeholders;
 
 // This should typically be _lower_ than the number of images in the display
@@ -77,6 +87,10 @@ public:
         unsigned max_timestamps = 0;
         bool enable_vulkan_validation = false;
         unsigned fake_device_multiplier = 0;
+
+        //    0: capitalist
+        // >= 1: worker
+        size_t host_id_self = 0;
     };
 
     context(const options& opt);
@@ -86,8 +100,16 @@ public:
 
     virtual bool init_frame();
 
-    device_data& get_display_device();
+    // nullptr on worker!
+    device_data* get_display_device();
     std::vector<device_data>& get_devices();
+    std::vector<network_device_data>& get_network_devices();
+
+    void assign_network_ids();
+    bool is_worker() const;
+    size_t get_host_count() const;
+    size_t get_host_id() const;
+
     uvec2 get_size() const;
     vk::Format get_display_format() const;
     vk::ImageLayout get_expected_display_layout() const;
@@ -184,6 +206,7 @@ private:
     std::vector<const char*> validation_layers;
     vk::DebugUtilsMessengerEXT debug_messenger;
     std::vector<device_data> devices;
+    std::vector<network_device_data> network_devices;
     size_t display_device_index;
 
     std::vector<vkm<vk::Semaphore>> image_available;

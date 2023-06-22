@@ -38,7 +38,7 @@ vk::Buffer environment_map::get_alias_table(size_t device_index) const
 void environment_map::generate_alias_table()
 {
     alias_table.clear();
-    device_data& dev = ctx->get_display_device();
+    device_data& dev = ctx->get_devices()[0];
     compute_pipeline importance_pipeline(
         dev, compute_pipeline::params{
             {"shader/alias_table_importance.comp", {}}, {}, 0, true

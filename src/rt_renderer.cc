@@ -25,9 +25,11 @@ namespace tr
 
 template<typename Pipeline>
 rt_renderer<Pipeline>::rt_renderer(context& ctx, const options& opt)
-:   ctx(&ctx), opt(opt),
-    post_processing(ctx.get_display_device(), ctx.get_size(), get_pp_opt(opt))
+:   ctx(&ctx), opt(opt)
 {
+    if(!ctx.is_worker())
+        post_processing.emplace(*ctx.get_display_device(), ctx.get_size(), get_pp_opt(opt));
+
     this->opt.distribution.size = ctx.get_size();
 
     if(
@@ -35,30 +37,31 @@ rt_renderer<Pipeline>::rt_renderer(context& ctx, const options& opt)
          opt.projection == camera::ORTHOGRAPHIC)
     ) use_raster_gbuffer = true;
 
-    std::vector<device_data>& devices = ctx.get_devices();
-    per_device.resize(devices.size());
-    for(size_t i = 0; i < per_device.size(); ++i)
+    std::vector<network_device_data>& net_devices = ctx.get_network_devices();
+    per_net_device.resize(net_devices.size());
+    for(size_t i = 0; i < per_net_device.size(); ++i)
     {
         init_device_resources(i);
     }
 
-    init_primary_device_resources();
+    if(!ctx.is_worker())
+        init_primary_device_resources();
 }
 
 template<typename Pipeline>
 rt_renderer<Pipeline>::~rt_renderer()
 {
-    std::vector<device_data>& devices = ctx->get_devices();
-    device_data& display_device = ctx->get_display_device();
+    std::vector<network_device_data>& net_devices = ctx->get_network_devices();
+    device_data* display_device = ctx->get_display_device();
     ctx->sync();
 
     // Ensure each pipeline is deleted before the assets they may use
     stitch.reset();
 
-    for(size_t i = 0; i < per_device.size(); ++i)
+    for(size_t i = 0; i < per_net_device.size(); ++i)
     {
-        device_data& dev = devices[i];
-        per_device_data& d = per_device[i];
+        network_device_data& dev = net_devices[i];
+        per_device_data& d = per_net_device[i];
         d.ray_tracer.reset();
         for(auto& f: d.per_frame)
         {
@@ -66,12 +69,19 @@ rt_renderer<Pipeline>::~rt_renderer()
             {
                 if(!tb.host_ptr) continue;
                 release_host_buffer(tb.host_ptr);
-                destroy_host_allocated_buffer(
-                    dev, tb.gpu_to_cpu, tb.gpu_to_cpu_mem
-                );
-                destroy_host_allocated_buffer(
-                    display_device, tb.cpu_to_gpu, tb.cpu_to_gpu_mem
-                );
+                if(!d.remote)
+                {
+                    destroy_host_allocated_buffer(
+                        ctx->get_devices()[dev.local_device_index],
+                        tb.gpu_to_cpu, tb.gpu_to_cpu_mem
+                    );
+                }
+                if(!ctx->is_worker())
+                {
+                    destroy_host_allocated_buffer(
+                        *display_device, tb.cpu_to_gpu, tb.cpu_to_gpu_mem
+                    );
+                }
             }
         }
     }
@@ -85,31 +95,39 @@ void rt_renderer<Pipeline>::set_scene(scene* s)
     if(s)
     {
         s->refresh_instance_cache(true);
-        for(size_t i = 0; i < per_device.size(); ++i)
+        for(size_t i = 0; i < per_net_device.size(); ++i)
         {
-            per_device[i].skinning->set_scene(s);
-            per_device[i].scene_update->set_scene(s);
-            if(per_device[i].ray_tracer)
-                per_device[i].ray_tracer->set_scene(s);
+            if(per_net_device[i].remote)
+                continue;
+
+            per_device_data& d = per_net_device[i];
+            d.skinning->set_scene(s);
+            d.scene_update->set_scene(s);
+            if(d.ray_tracer)
+                d.ray_tracer->set_scene(s);
         }
 
-        if(gbuffer_rasterizer)
-            gbuffer_rasterizer->set_scene(s);
+        if(!ctx->is_worker())
+        {
+            if(gbuffer_rasterizer)
+                gbuffer_rasterizer->set_scene(s);
 
-        post_processing.set_scene(s);
+            post_processing->set_scene(s);
+        }
     }
 }
 
 template<typename Pipeline>
 void rt_renderer<Pipeline>::reset_accumulation(bool reset_sample_counter)
 {
-    for(size_t i = 0; i < per_device.size(); ++i)
+    for(size_t i = 0; i < per_net_device.size(); ++i)
     {
-        if(per_device[i].ray_tracer)
+        per_device_data& d = per_net_device[i];
+        if(!d.remote && d.ray_tracer)
         {
-            per_device[i].ray_tracer->reset_accumulated_samples();
+            d.ray_tracer->reset_accumulated_samples();
             if(reset_sample_counter)
-                per_device[i].ray_tracer->reset_sample_counter();
+                d.ray_tracer->reset_sample_counter();
         }
     }
     accumulated_frames = 0;
@@ -125,22 +143,41 @@ void rt_renderer<Pipeline>::render()
     ctx->get_indices(swapchain_index, frame_index);
     uint64_t frame_counter = ctx->get_frame_counter();
 
-    device_data& display_device = ctx->get_display_device();
+    device_data* display_device = ctx->get_display_device();
     std::vector<device_data>& devices = ctx->get_devices();
+    std::vector<network_device_data>& net_devices = ctx->get_network_devices();
 
-    for(size_t i = 0; i < devices.size(); ++i)
+    for(size_t i = 0; i < per_net_device.size(); ++i)
     {
-        dependencies device_deps = per_device[i].skinning->run(per_device[i].last_frame_deps);
-        device_data& dev = devices[i];
-        device_deps = per_device[i].scene_update->run(device_deps);
-        if(i == ctx->get_display_device().index)
-            device_deps.concat(post_processing.get_gbuffer_write_dependencies());
-        device_deps = per_device[i].ray_tracer->run(device_deps);
-        per_device[i].last_frame_deps = device_deps;
+        per_device_data& d = per_net_device[i];
 
-        if(i != display_device.index)
+        dependencies device_deps;
+        if(!d.remote)
         {
-            per_frame_data& f = per_device[i].per_frame[frame_index];
+            device_deps = d.skinning->run(d.last_frame_deps);
+            device_deps = d.scene_update->run(device_deps);
+            if(!ctx->is_worker() && i == display_device->network_id)
+                device_deps.concat(post_processing->get_gbuffer_write_dependencies());
+            device_deps = d.ray_tracer->run(device_deps);
+            d.last_frame_deps = device_deps;
+        }
+
+        if(ctx->is_worker())
+        {
+            if(!d.remote)
+            {
+                // TODO: Start transfer to host
+            }
+        }
+        else if(i == display_device->network_id)
+        { // Display device on capitalist
+            if(gbuffer_rasterizer)
+                device_deps = gbuffer_rasterizer->run(device_deps);
+            display_deps.concat(device_deps);
+        }
+        else if(!d.remote)
+        { // Alternate device on capitalist
+            per_frame_data& f = d.per_frame[frame_index];
             vk::TimelineSemaphoreSubmitInfo timeline_info = device_deps.get_timeline_info();
             vk::SubmitInfo submit_info = device_deps.get_submit_info(timeline_info);
             submit_info.commandBufferCount = 1;
@@ -150,7 +187,7 @@ void rt_renderer<Pipeline>::render()
 
             vk::PipelineStageFlags wait_stage =
                 vk::PipelineStageFlagBits::eTopOfPipe;
-            dev.graphics_queue.submit(submit_info, {});
+            devices[net_devices[i].local_device_index].graphics_queue.submit(submit_info, {});
 
             timeline_info.waitSemaphoreValueCount = 0;
             timeline_info.pWaitSemaphoreValues = nullptr;
@@ -164,28 +201,29 @@ void rt_renderer<Pipeline>::render()
             submit_info.signalSemaphoreCount = 1;
             submit_info.pSignalSemaphores = f.cpu_to_gpu_sem.get();
 
-            display_device.graphics_queue.submit(submit_info, {});
+            display_device->graphics_queue.submit(submit_info, {});
             display_deps.add({f.cpu_to_gpu_sem, frame_counter});
         }
         else
-        {
-            if(gbuffer_rasterizer)
-                device_deps = gbuffer_rasterizer->run(device_deps);
-            display_deps.concat(device_deps);
+        { // Remote device on capitalist
+            // TODO: Receive transfer from remote
         }
     }
 
-    display_deps.concat(post_processing.get_gbuffer_write_dependencies());
-
-    if(stitch)
+    if(!ctx->is_worker())
     {
-        stitch->refresh_params();
-        display_deps = stitch->run(display_deps);
-        // Reset temporary blending from stitching
-        stitch->set_blend_ratio(1.0f);
-    }
+        display_deps.concat(post_processing->get_gbuffer_write_dependencies());
 
-    display_deps = post_processing.render(display_deps);
+        if(stitch)
+        {
+            stitch->refresh_params();
+            display_deps = stitch->run(display_deps);
+            // Reset temporary blending from stitching
+            stitch->set_blend_ratio(1.0f);
+        }
+
+        display_deps = post_processing->render(display_deps);
+    }
     ctx->end_frame(display_deps);
     accumulated_frames++;
 }
@@ -193,18 +231,19 @@ void rt_renderer<Pipeline>::render()
 template<typename Pipeline>
 void rt_renderer<Pipeline>::set_device_workloads(const std::vector<double>& ratios)
 {
-    assert(ratios.size() == per_device.size());
+    assert(ratios.size() == per_net_device.size());
     if(
         opt.distribution.strategy == DISTRIBUTION_SCANLINE ||
         opt.distribution.strategy == DISTRIBUTION_DUPLICATE
     ) return;
 
-    device_data& display_device = ctx->get_display_device();
+    device_data* display_device = ctx->get_display_device();
+    std::vector<device_data>& devices = ctx->get_devices();
 
     double cumulative = 0;
-    for(size_t i = 0; i < per_device.size(); ++i)
+    for(size_t i = 0; i < per_net_device.size(); ++i)
     {
-        per_device_data& r = per_device[i];
+        per_device_data& r = per_net_device[i];
 
         double ratio = clamp(ratios[i], 0.0, 1.0 - cumulative);
         r.dist = get_device_distribution_params(
@@ -212,29 +251,32 @@ void rt_renderer<Pipeline>::set_device_workloads(const std::vector<double>& rati
             opt.distribution.strategy,
             cumulative,
             ratio,
-            i,
-            ctx->get_devices().size(),
-            i == ctx->get_display_device().index
+            devices[i].network_id,
+            ctx->get_network_devices().size(),
+            !ctx->is_worker() && i == display_device->network_id
         );
         cumulative += ratio;
-        per_device[i].ray_tracer->reset_distribution_params(r.dist);
+        if(!r.remote)
+            per_net_device[i].ray_tracer->reset_distribution_params(r.dist);
         // Only the primary device renders in-place, so it's the only device
         // that can actually accumulate samples normally when workload ratio
         // changes.
-        if(i != display_device.index)
-            per_device[i].ray_tracer->reset_accumulated_samples();
-        uvec2 target_size = get_distribution_target_size(r.dist);
-        for(size_t j = 0; j < MAX_FRAMES_IN_FLIGHT; ++j)
+        if(!ctx->is_worker() && !r.remote)
         {
-            reset_transfer_command_buffers(
-                j, per_device[i], per_device[i].per_frame[j],
-                target_size, ctx->get_display_device(), ctx->get_devices()[i]
-            );
+            if(i != display_device->network_id)
+                r.ray_tracer->reset_accumulated_samples();
+            uvec2 target_size = get_distribution_target_size(r.dist);
+            for(size_t j = 0; j < MAX_FRAMES_IN_FLIGHT; ++j)
+            {
+                reset_transfer_command_buffers(
+                    j, r, r.per_frame[j], target_size, *display_device, devices[i]
+                );
+            }
         }
     }
 
     std::vector<distribution_params> dist;
-    for(per_device_data& r: per_device)
+    for(per_device_data& r: per_net_device)
         dist.push_back(r.dist);
 
     // Temporarily blend non-primary GPU accumulation from stitching stage
@@ -247,21 +289,29 @@ void rt_renderer<Pipeline>::set_device_workloads(const std::vector<double>& rati
 template<typename Pipeline>
 void rt_renderer<Pipeline>::init_device_resources(size_t device_index)
 {
-    device_data& d = ctx->get_devices()[device_index];
-    bool is_display_device = d.index == ctx->get_display_device().index;
-    double even_workload_ratio = 1.0/ctx->get_devices().size();
+    std::vector<network_device_data>& net_devices = ctx->get_network_devices();
+    int local_device_index = net_devices[device_index].local_device_index;
 
-    per_device_data& r = per_device[device_index];
+    bool is_display_device = !ctx->is_worker() && device_index == ctx->get_display_device()->network_id;
+    double even_workload_ratio = 1.0/ctx->get_network_devices().size();
+
+    per_device_data& r = per_net_device[device_index];
+    r.remote = local_device_index < 0;
     r.per_frame.resize(MAX_FRAMES_IN_FLIGHT);
-    r.skinning.reset(new skinning_stage(d, opt.max_instances));
-    r.scene_update.reset(new scene_update_stage(d, opt.scene_options));
+
+    if(local_device_index >= 0)
+    {
+        device_data& d = ctx->get_devices()[local_device_index];
+        r.skinning.reset(new skinning_stage(d, opt.max_instances));
+        r.scene_update.reset(new scene_update_stage(d, opt.scene_options));
+    }
     r.dist = get_device_distribution_params(
         ctx->get_size(),
         opt.distribution.strategy,
         even_workload_ratio * device_index,
         even_workload_ratio,
         device_index,
-        ctx->get_devices().size(),
+        net_devices.size(),
         is_display_device
     );
 
@@ -275,7 +325,8 @@ void rt_renderer<Pipeline>::init_device_resources(size_t device_index)
     gbuffer_spec spec, copy_spec;
     spec.color_present = true;
     spec.color_format = vk::Format::eR32G32B32A32Sfloat;
-    post_processing.set_gbuffer_spec(spec);
+    if(!ctx->is_worker())
+        post_processing->set_gbuffer_spec(spec);
 
     // Disable raster G-Buffer when nothing rasterizable is needed.
     if(
@@ -314,19 +365,28 @@ void rt_renderer<Pipeline>::init_device_resources(size_t device_index)
 
     if(!is_display_device)
     {
-        r.gpu_to_cpu_timer = timer(d, "distribution frame to host");
-        r.cpu_to_gpu_timer = timer(
-            ctx->get_display_device(), "distribution frame from host"
-        );
+        if(!r.remote)
+        {
+            device_data& d = ctx->get_devices()[local_device_index];
+            r.gpu_to_cpu_timer = timer(d, "distribution frame to host");
+        }
+        if(!ctx->is_worker())
+            r.cpu_to_gpu_timer = timer(
+                *ctx->get_display_device(), "distribution frame from host"
+            );
     }
 
-    r.gbuffer.reset(d, max_target_size, ctx->get_display_count());
-    r.gbuffer.add(spec);
-
-    if(!is_display_device)
+    if(!r.remote)
     {
-        device_data& display_device = ctx->get_display_device();
-        r.gbuffer_copy.reset(display_device, max_target_size, ctx->get_display_count());
+        device_data& d = ctx->get_devices()[local_device_index];
+        r.gbuffer.reset(d, max_target_size, ctx->get_display_count());
+        r.gbuffer.add(spec);
+    }
+
+    if(!is_display_device && !ctx->is_worker())
+    {
+        device_data* display_device = ctx->get_display_device();
+        r.gbuffer_copy.reset(*display_device, max_target_size, ctx->get_display_count());
         r.gbuffer_copy.add(copy_spec);
     }
 
@@ -334,9 +394,17 @@ void rt_renderer<Pipeline>::init_device_resources(size_t device_index)
     {
         auto& f = r.per_frame[i];
 
-        if(!is_display_device)
+        if(ctx->is_worker())
         {
-            device_data& display_device = ctx->get_display_device();
+            if(!r.remote)
+            {
+                // TODO: Alloc remote memory transfer send buffers
+            }
+        }
+        else if(!is_display_device && !r.remote)
+        {
+            device_data& d = ctx->get_devices()[local_device_index];
+            device_data& display_device = *ctx->get_display_device();
 
             size_t sz = max_target_size.x*max_target_size.y*color_format_size*ctx->get_display_count();
             for(size_t j = 0; j < r.gbuffer_copy.entry_count(); ++j)
@@ -403,8 +471,12 @@ void rt_renderer<Pipeline>::init_device_resources(size_t device_index)
 #endif
             f.cpu_to_gpu_sem = create_timeline_semaphore(display_device);
             reset_transfer_command_buffers(
-                i, r, f, target_size, ctx->get_display_device(), d
+                i, r, f, target_size, display_device, d
             );
+        }
+        else if(!is_display_device && r.remote)
+        {
+            // TODO: Alloc remote memory transfer receive buffers
         }
     }
 
@@ -421,30 +493,34 @@ void rt_renderer<Pipeline>::init_device_resources(size_t device_index)
         vk::ImageLayout::eGeneral : vk::ImageLayout::eTransferSrcOptimal
     );
 
-    r.ray_tracer.reset(new Pipeline(
-        d,
-        transfer_target,
-        rt_opt
-    ));
+    if(!r.remote)
+    {
+        device_data& d = ctx->get_devices()[local_device_index];
+        r.ray_tracer.reset(new Pipeline(
+            d,
+            transfer_target,
+            rt_opt
+        ));
+    }
 }
 
 template<typename Pipeline>
 void rt_renderer<Pipeline>::init_primary_device_resources()
 {
-    size_t device_count = ctx->get_devices().size();
+    size_t device_count = ctx->get_network_devices().size();
     if(device_count > 1)
     { // If multi-device, use parallel implementation
         std::vector<gbuffer_target> dimgs;
-        for(size_t i = 0; i < per_device.size(); ++i)
+        for(size_t i = 0; i < per_net_device.size(); ++i)
         {
             gbuffer_target dimg;
-            if(i == ctx->get_display_device().index)
+            if(i == ctx->get_display_device()->network_id)
             {
-                dimg = per_device[i].gbuffer.get_array_target();
+                dimg = per_net_device[i].gbuffer.get_array_target();
             }
             else
             {
-                dimg = per_device[i].gbuffer_copy.get_array_target();
+                dimg = per_net_device[i].gbuffer_copy.get_array_target();
             }
 
             if(use_raster_gbuffer)
@@ -459,11 +535,11 @@ void rt_renderer<Pipeline>::init_primary_device_resources()
         }
 
         std::vector<distribution_params> dist;
-        for(per_device_data& r: per_device)
+        for(per_device_data& r: per_net_device)
             dist.push_back(r.dist);
 
         stitch.reset(new stitch_stage(
-            ctx->get_display_device(),
+            *ctx->get_display_device(),
             ctx->get_size(),
             dimgs,
             dist,
@@ -474,7 +550,7 @@ void rt_renderer<Pipeline>::init_primary_device_resources()
         ));
     }
 
-    gbuffer_texture& gbuf_tex = per_device[ctx->get_display_device().index].gbuffer;
+    gbuffer_texture& gbuf_tex = per_net_device[ctx->get_display_device()->network_id].gbuffer;
     if(use_raster_gbuffer)
     {
         raster_stage::options raster_opt;
@@ -499,14 +575,14 @@ void rt_renderer<Pipeline>::init_primary_device_resources()
         if(gbuffer_block_targets[0].entry_count() != 0)
         {
             gbuffer_rasterizer.reset(new raster_stage(
-                ctx->get_display_device(), gbuffer_block_targets, raster_opt
+                *ctx->get_display_device(), gbuffer_block_targets, raster_opt
             ));
         }
     }
 
     gbuffer_target pp_target = gbuf_tex.get_array_target();
     pp_target.set_layout(vk::ImageLayout::eGeneral);
-    post_processing.set_display(pp_target);
+    post_processing->set_display(pp_target);
 }
 
 template<typename Pipeline>

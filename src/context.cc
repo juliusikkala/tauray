@@ -74,14 +74,48 @@ context::~context() {}
 
 bool context::init_frame() { return false; }
 
-device_data& context::get_display_device()
+device_data* context::get_display_device()
 {
-    return devices[display_device_index];
+    if(is_worker()) return nullptr;
+    return &devices[display_device_index];
 }
 
 std::vector<device_data>& context::get_devices()
 {
     return devices;
+}
+
+std::vector<network_device_data>& context::get_network_devices()
+{
+    return network_devices;
+}
+
+void context::assign_network_ids()
+{
+    for(network_device_data& data: network_devices)
+    {
+        if(data.remote_host_id == opt.host_id_self)
+            devices[data.local_device_index].network_id = data.network_id;
+        else data.local_device_index = -1;
+    }
+}
+
+bool context::is_worker() const
+{
+    return opt.host_id_self != 0;
+}
+
+size_t context::get_host_count() const
+{
+    size_t n = 0;
+    for(const network_device_data& data: network_devices)
+        n = max(n, data.remote_host_id);
+    return n+1;
+}
+
+size_t context::get_host_id() const
+{
+    return opt.host_id_self;
 }
 
 uvec2 context::get_size() const
@@ -155,8 +189,8 @@ dependency context::begin_frame()
     frame_counter++;
 
     timing.host_wait();
-    device_data& d = get_display_device();
-    (void)d.dev.waitForFences(*frame_fences[frame_index], true, UINT64_MAX);
+    device_data* d = get_display_device();
+    (void)d->dev.waitForFences(*frame_fences[frame_index], true, UINT64_MAX);
 
     // Get new images
     swapchain_index = prepare_next_image(frame_index);
@@ -177,13 +211,13 @@ dependency context::begin_frame()
         1, &frame_counter
     );
     submit_info.pNext = (void*)&timeline_submit_info;
-    d.graphics_queue.submit(submit_info, {});
+    d->graphics_queue.submit(submit_info, {});
 
     if(image_fences[swapchain_index])
-        (void)d.dev.waitForFences(image_fences[swapchain_index], true, UINT64_MAX);
+        (void)d->dev.waitForFences(image_fences[swapchain_index], true, UINT64_MAX);
     image_fences[swapchain_index] = frame_fences[frame_index];
 
-    d.dev.resetFences(*frame_fences[frame_index]);
+    d->dev.resetFences(*frame_fences[frame_index]);
 
     call_frame_end_actions(frame_index);
 
@@ -198,7 +232,7 @@ void context::end_frame(const dependencies& deps)
 {
     dependencies local_deps = fill_end_frame_dependencies(deps);
 
-    device_data& d = get_display_device();
+    device_data* d = get_display_device();
 
     std::vector<vk::PipelineStageFlags> wait_stages(
         local_deps.size(), vk::PipelineStageFlagBits::eTopOfPipe
@@ -209,7 +243,7 @@ void context::end_frame(const dependencies& deps)
     submit_info.signalSemaphoreCount = image_array_layers != 0 ? 1 : 0;
     submit_info.pSignalSemaphores = frame_finished[frame_index];
 
-    d.graphics_queue.submit(submit_info, frame_fences[frame_index]);
+    d->graphics_queue.submit(submit_info, frame_fences[frame_index]);
 
     finish_image(frame_index, swapchain_index, is_displaying);
     if(is_displaying) displayed_frame_counter++;
@@ -566,6 +600,7 @@ void context::init_devices()
             >();
 
             dev_data.index = devices.size();
+            dev_data.network_id = devices.size();
             dev_data.ctx = this;
             dev_data.pdev = pdev;
             vk::DeviceCreateInfo device_create_info(
@@ -649,6 +684,11 @@ void context::init_devices()
             allocator_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
             vmaCreateAllocator(&allocator_info, &dev_data.allocator);
 
+            network_devices.push_back({
+                dev_data.index,
+                int(dev_data.index),
+                opt.host_id_self
+            });
             devices.push_back(std::move(dev_data));
         }
     }
@@ -677,7 +717,7 @@ void context::deinit_devices()
 
 void context::init_resources()
 {
-    device_data& dev_data = get_display_device();
+    device_data* dev_data = get_display_device();
 
     // Create fences & semaphores
     frame_available.resize(MAX_FRAMES_IN_FLIGHT);
@@ -686,20 +726,20 @@ void context::init_resources()
     image_fences.resize(get_swapchain_image_count());
     for(size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
-        frame_available[i] = create_binary_semaphore(dev_data);
-        frame_finished[i] = create_binary_semaphore(dev_data);
+        frame_available[i] = create_binary_semaphore(*dev_data);
+        frame_finished[i] = create_binary_semaphore(*dev_data);
         frame_fences[i] =
-            vkm(dev_data, dev_data.dev.createFence({vk::FenceCreateFlagBits::eSignaled}));
+            vkm(*dev_data, dev_data->dev.createFence({vk::FenceCreateFlagBits::eSignaled}));
     }
 
     for(size_t i = 0; i < get_swapchain_image_count(); ++i)
     {
-        image_available.emplace_back(create_timeline_semaphore(dev_data));
+        image_available.emplace_back(create_timeline_semaphore(*dev_data));
     }
 
     if(get_swapchain_image_count() == 0)
     {
-        image_available.emplace_back(create_timeline_semaphore(dev_data));
+        image_available.emplace_back(create_timeline_semaphore(*dev_data));
         image_fences.resize(1);
     }
 
@@ -710,14 +750,14 @@ void context::init_resources()
 
 void context::reset_image_views()
 {
-    device_data& dev_data = get_display_device();
+    device_data* dev_data = get_display_device();
 
     // Create image views
     array_image_views.clear();
     for(size_t i = 0; i < images.size(); ++i)
     {
-        array_image_views.emplace_back(dev_data,
-            dev_data.dev.createImageView({
+        array_image_views.emplace_back(*dev_data,
+            dev_data->dev.createImageView({
                 {},
                 *images[i],
                 vk::ImageViewType::e2DArray,

@@ -229,7 +229,7 @@ size_t shadow_map_renderer::get_total_cascade_count() const
 
 void shadow_map_renderer::init_resources()
 {
-    device_data& d = ctx->get_display_device();
+    device_data& d = *ctx->get_display_device();
 
     shadow_atlas.reset(new atlas(
         d, {}, 1, vk::Format::eD32Sfloat,
@@ -365,10 +365,10 @@ void shadow_map_renderer::add_stage(
     }
 
     render_target target = shadow_atlas->get_layer_render_target(
-        0, ctx->get_display_device().index
+        0, ctx->get_display_device()->index
     );
     smp.emplace_back(new shadow_map_stage(
-        ctx->get_display_device(), rect, target,
+        *ctx->get_display_device(), rect, target,
         {cur_scene->get_sampler_count()}
     ));
     smp.back()->set_scene(cur_scene);

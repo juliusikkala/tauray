@@ -56,7 +56,7 @@ private:
 
     context* ctx;
     options opt;
-    post_processing_renderer post_processing;
+    std::optional<post_processing_renderer> post_processing;
     bool use_raster_gbuffer = true;
     unsigned accumulated_frames = 0;
 
@@ -89,6 +89,7 @@ private:
 
     struct per_device_data
     {
+        bool remote;
         gbuffer_texture gbuffer;
         gbuffer_texture gbuffer_copy;
 
@@ -103,7 +104,7 @@ private:
         distribution_params dist;
         dependencies last_frame_deps;
     };
-    std::vector<per_device_data> per_device;
+    std::vector<per_device_data> per_net_device;
     std::unique_ptr<stitch_stage> stitch;
     std::unique_ptr<raster_stage> gbuffer_rasterizer;
 
