@@ -1,7 +1,5 @@
-#include <cassert>
 #include <iostream>
 #include <netdb.h>
-#include <stdexcept>
 
 #include "rdma.hh"
 

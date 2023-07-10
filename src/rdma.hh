@@ -3,17 +3,19 @@
 
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <condition_variable>
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
-
-#include <infiniband/verbs.h>
-#include <rdma/rdma_cma.h>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include <infiniband/verbs.h>
+#include <rdma/rdma_cma.h>
 
 #define MAX_SGE_COUNT 10
 #define WR_QUEUE_SIZE 10
@@ -77,7 +79,8 @@ private:
 
     /**
      * Get next event associated with given cm_id. All events MUST be
-     * acknowledged with rdma_ack_cm_event once handled. Must not be called again with the same cm_id after finalizeNewConnection.
+     * acknowledged with rdma_ack_cm_event once handled. Must not be called
+     * again with the same cm_id after finalizeNewConnection.
      *
      * @param cm_id id that events should correspond to. If nullptr, returns any
      * RDMA_CM_EVENT_CONNECT_REQUEST in the new connection buffer or blocks
@@ -88,6 +91,7 @@ private:
     void finalizeNewConnection(rdma_cm_id* cm_id);
 
     operator rdma_event_channel*() { return handle; }
+
 public:
     static EventChannelPtr create()
     {
