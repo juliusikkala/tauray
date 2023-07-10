@@ -394,6 +394,7 @@ template<typename T> class RdmaBuffer
 {
 private:
     static_assert(std::is_trivial_v<T>);
+    size_t size;
     std::unique_ptr<T[]> ptr;
     ibverbs::MemoryRegionPtr mr;
 
@@ -407,12 +408,20 @@ public:
     )
     {
         ptr.reset(new T[elements]);
+        size = elements;
         mr = ibverbs::MemoryRegion::register_ptr(
             pd, (void*)ptr.get(), sizeof(T) * elements, access
         );
     }
 
     ibverbs::MemoryRegionPtr operator*() { return mr; }
+
+    T& at(size_t i)
+    {
+        if(i > size)
+            throw std::runtime_error("index out of bounds");
+        return ptr[i];
+    }
 };
 
 /** Defines (a subregion of) a memory region to be used for a work request */
