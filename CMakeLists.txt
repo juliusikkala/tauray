@@ -65,6 +65,8 @@ find_package(libcbor QUIET)
 find_package(Vulkan REQUIRED)
 find_package(assimp REQUIRED)
 find_package(cereal REQUIRED)
+find_package(ibverbs QUIET)
+find_package(rdmacm QUIET)
 
 add_library(tauray-core STATIC
   external/stb_image.c
@@ -128,6 +130,7 @@ add_library(tauray-core STATIC
   src/raster_pipeline.cc
   src/raster_stage.cc
   src/raster_renderer.cc
+  src/rdma.cc
   src/rectangle_packer.cc
   src/render_target.cc
   src/rt_camera_stage.cc
@@ -223,6 +226,19 @@ if(NOT libcbor_FOUND)
     endif()
 else()
     target_link_libraries(tauray-core PUBLIC ${LIBCBOR_LIBRARY})
+endif()
+
+if(NOT rdmacm_FOUND AND NOT ibverbs_FOUND)
+    if(UNIX)
+        message(WARNING "libibverbs and librdmacm not found directly, falling back to PkgConfig")
+        pkg_check_modules(libibverbs REQUIRED libibverbs IMPORTED_TARGET)
+        pkg_check_modules(librdmacm REQUIRED librdmacm IMPORTED_TARGET)
+        target_link_libraries(tauray-core PUBLIC PkgConfig::libibverbs PkgConfig::librdmacm)
+    else()
+        message(FATAL_ERROR "RDMA libraries not found. TODO: simply don't build RDMA code")
+    endif()
+else()
+    target_link_libraries(tauray-core PUBLIC ${IBVERBS_LIBRARY} ${RDMACM_LIBRARY})
 endif()
 
 set(DATA_PATH "${CMAKE_INSTALL_PREFIX}/share/tauray")
