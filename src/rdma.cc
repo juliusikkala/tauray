@@ -24,6 +24,7 @@ EventChannel::~EventChannel()
 {
     if(handle)
     {
+        stop_polling = 1;
         worker_th.join();
         for(rdma_cm_event* event: shared_queue)
         {
@@ -38,6 +39,13 @@ EventChannel::~EventChannel()
         }
         rdma_destroy_event_channel(handle);
     }
+}
+
+void EventChannel::shutdown() {
+  stop_polling = 1;
+  std::scoped_lock l(new_connection_mutex, shared_queue_mutex);
+  shared_queue_cond.notify_all();
+  new_connection_cond.notify_all();
 }
 
 void EventChannel::poll_loop()

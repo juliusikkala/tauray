@@ -104,6 +104,8 @@ public:
      * All events MUST be acknowledged with rdma_ack_cm_event once handled.
      */
     rdma_cm_event* getNext();
+
+    void shutdown();
 };
 
 /** RAII wrapper for the RDMA Connection Manager ID. The ID is conceptually
