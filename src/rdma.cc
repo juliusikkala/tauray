@@ -41,11 +41,12 @@ EventChannel::~EventChannel()
     }
 }
 
-void EventChannel::shutdown() {
-  stop_polling = 1;
-  std::scoped_lock l(new_connection_mutex, shared_queue_mutex);
-  shared_queue_cond.notify_all();
-  new_connection_cond.notify_all();
+void EventChannel::shutdown()
+{
+    stop_polling = 1;
+    std::scoped_lock l(new_connection_mutex, shared_queue_mutex);
+    shared_queue_cond.notify_all();
+    new_connection_cond.notify_all();
 }
 
 void EventChannel::poll_loop()
@@ -213,9 +214,9 @@ MemoryRegion::MemoryRegion(
     size_t length,
     MemoryRegion::Access access
 ):
-    handle(nullptr)
+    handle(nullptr), flags(access)
 {
-    handle = ibv_reg_mr(*pd, addr, length, access);
+    handle = ibv_reg_mr(*pd, addr, length, access.val);
     assert(handle && "Is your pinned memory limit too low?");
 }
 
@@ -226,9 +227,9 @@ MemoryRegion::MemoryRegion(
     int fd,
     MemoryRegion::Access access
 ):
-    handle(nullptr)
+    handle(nullptr), flags(access)
 {
-    handle = ibv_reg_dmabuf_mr(*pd, offset, length, /*iova*/ 0, fd, access);
+    handle = ibv_reg_dmabuf_mr(*pd, offset, length, /*iova*/ 0, fd, access.val);
     assert(handle);
 }
 
@@ -330,7 +331,9 @@ QueuePair::~QueuePair()
 }
 
 ScatterGatherEntry::ScatterGatherEntry(ibverbs::MemoryRegionPtr mr):
-    sge{(uint64_t)((ibv_mr*)**mr)->addr,
+    sge{((mr->accessFlags() | ibverbs::MemoryRegion::Access::ZeroBased).val
+             ? 0
+             : (uint64_t)((ibv_mr*)**mr)->addr),
         (uint32_t)mr->handle->length,
         mr->handle->lkey},
     mr(mr)
@@ -341,7 +344,10 @@ ScatterGatherEntry::ScatterGatherEntry(
     ptrdiff_t offset,
     uint32_t length
 ):
-    sge{(uint64_t)((ibv_mr*)**mr)->addr + (int64_t)offset,
+    sge{((mr->accessFlags() | ibverbs::MemoryRegion::Access::ZeroBased).val
+             ? 0
+             : (uint64_t)((ibv_mr*)**mr)->addr) +
+            (int64_t)offset,
         length,
         ((ibv_mr*)**mr)->lkey},
     mr(mr)

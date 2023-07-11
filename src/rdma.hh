@@ -266,11 +266,13 @@ public:
         operator unsigned int() const { return val; }
 
         friend class MemoryRegion;
+        friend class ::ScatterGatherEntry;
 
     public:
         Access() = delete;
 
         Access operator|(const Access& other) const { return val | other.val; }
+        Access operator&(const Access &other) const { return val & other.val; }
 
         /** Default - local read access is always enabled */
         static const Access LocalRead;
@@ -315,6 +317,7 @@ public:
 private:
     ProtectionDomainPtr pd;
     ibv_mr* handle;
+    Access flags;
 
     friend class ::ScatterGatherEntry;
 
@@ -383,6 +386,8 @@ public:
     }
 
     uint32_t rkey() { return handle->rkey; }
+
+    Access accessFlags() { return flags; }
 };
 
 class WorkCompletion: public ibv_wc
