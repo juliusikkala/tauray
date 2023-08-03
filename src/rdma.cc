@@ -735,6 +735,7 @@ void RdmaListener::listen(uint16_t port)
     addrinfo* ai = get_listen_address(port);
 
     int err = rdma_bind_addr(*listening_id, ai->ai_addr);
+    freeaddrinfo(ai);
     if(err)
         throw std::runtime_error(strerror(errno));
 
@@ -791,6 +792,7 @@ RdmaConnection RdmaConnection::connect(const char* address, uint16_t port)
 
     int timeout_ms = 5000;
     int err = rdma_resolve_addr(*cm_id, NULL, ai->ai_addr, timeout_ms);
+    freeaddrinfo(ai);
     if(err)
         throw std::runtime_error(strerror(errno));
 
